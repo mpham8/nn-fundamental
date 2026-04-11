@@ -5,6 +5,7 @@
 #include <numeric>
 #include <random>
 #include <string>
+#include <utility>
 #include <vector>
 
 #define EIGEN_DEFAULT_TO_ROW_MAJOR
@@ -12,6 +13,7 @@ using RowMatrixXf = Eigen::MatrixXf;
 
 class nn {
  private:
+  //model weights
   Eigen::MatrixXf w1;
   Eigen::MatrixXf b1;
   Eigen::MatrixXf w2;
@@ -21,11 +23,13 @@ class nn {
   Eigen::MatrixXf z1;
   RowMatrixXf probs;
 
+  //gradients
   Eigen::MatrixXf dJdw2;
   Eigen::MatrixXf dJdw1;
   Eigen::MatrixXf dJdb2;
   Eigen::MatrixXf dJdb1;
 
+  //momentum for adam optimizer
   Eigen::MatrixXf m_dJdw2;
   Eigen::MatrixXf v_dJdw2;
   Eigen::MatrixXf m_dJdw1;
@@ -46,11 +50,13 @@ class nn {
                    Eigen::MatrixXf &v, const Eigen::MatrixXf &g);
 
  public:
+  //adam optimizer hyperparameters
   float lr = 1e-3f;
   float beta1 = 0.9f;
   float beta2 = 0.999f;
   float eps = 1e-8f;
-
+  
+  
   nn(int inputDim, int hiddenDim, int outputDim) {
     w1 = Eigen::MatrixXf::Random(inputDim, hiddenDim) * 0.01f;
     w2 = Eigen::MatrixXf::Random(hiddenDim, outputDim) * 0.01f;
@@ -76,16 +82,17 @@ class nn {
   ~nn() = default;
 
   RowMatrixXf forward(const RowMatrixXf &x);
-  static RowMatrixXf oneHotEncoding(const Eigen::VectorXf &y, int num_classes);
+  static RowMatrixXf oneHotEncoding(const Eigen::VectorXf &y, int numClasses);
   void backward(const RowMatrixXf &x, const Eigen::VectorXf &y);
   void step();
 };
 
+
 RowMatrixXf nn::Linear(const RowMatrixXf &x, const RowMatrixXf &w,
                        const RowMatrixXf &b) {
   const Eigen::Index n = x.rows();
-  const RowMatrixXf b_broadcast = b.replicate(n, 1);
-  return x * w + b_broadcast;
+  const RowMatrixXf bBroadcast = b.replicate(n, 1);
+  return x * w + bBroadcast;
 }
 
 RowMatrixXf nn::ReLu(const RowMatrixXf &x) { return x.cwiseMax(0.0f); }
@@ -118,8 +125,8 @@ RowMatrixXf nn::oneHotEncoding(const Eigen::VectorXf &y, int numClasses) {
 
 void nn::backward(const RowMatrixXf &x, const Eigen::VectorXf &y) {
   const Eigen::Index m = x.rows();
-  const int num_classes = static_cast<int>(w2.cols());
-  const RowMatrixXf Y = oneHotEncoding(y, num_classes);
+  const int numClasses = static_cast<int>(w2.cols());
+  const RowMatrixXf Y = oneHotEncoding(y, numClasses);
 
   const RowMatrixXf dJdz2 = 1.0f / static_cast<float>(m) * (probs - Y);
   dJdw2 = a1.transpose() * dJdz2;
@@ -133,10 +140,10 @@ void nn::backward(const RowMatrixXf &x, const Eigen::VectorXf &y) {
 void nn::adam(Eigen::MatrixXf &theta, Eigen::MatrixXf &m,
                      Eigen::MatrixXf &v, const Eigen::MatrixXf &g) {
   m = beta1 * m + (1.f - beta1) * g;
-  Eigen::MatrixXf m_adj = m / (1.f - std::pow(beta1, static_cast<float>(iter)));
+  Eigen::MatrixXf mAdj = m / (1.f - std::pow(beta1, static_cast<float>(iter)));
   v = beta2 * v + (1.f - beta2) * g.cwiseProduct(g);
-  Eigen::MatrixXf v_adj = v / (1.f - std::pow(beta2, static_cast<float>(iter)));
-  theta.array() -= lr * m_adj.array() / (v_adj.array().sqrt() + eps);
+  Eigen::MatrixXf vAdj = v / (1.f - std::pow(beta2, static_cast<float>(iter)));
+  theta.array() -= lr * mAdj.array() / (vAdj.array().sqrt() + eps);
 }
 
 void nn::step() {
@@ -154,7 +161,7 @@ struct TrainTestSplit {
   Eigen::VectorXf yTest;
 };
 
-RowMatrixXf read_data(const std::string &path) {
+RowMatrixXf readData(const std::string &path) {
   rapidcsv::Document doc(path, rapidcsv::LabelParams(0, -1));
   const Eigen::Index n = static_cast<Eigen::Index>(doc.GetRowCount());
   const int kCols = 785;
@@ -167,11 +174,11 @@ RowMatrixXf read_data(const std::string &path) {
   return m;
 }
 
-TrainTestSplit prepare_train_test(RowMatrixXf raw, unsigned rng_seed) {
+TrainTestSplit prepareTrainTest(RowMatrixXf raw, unsigned rngSeed) {
   const size_t m = static_cast<size_t>(raw.rows());
   std::vector<size_t> perm(m);
   std::iota(perm.begin(), perm.end(), 0);
-  std::mt19937 gen(rng_seed);
+  std::mt19937 gen(rngSeed);
   std::shuffle(perm.begin(), perm.end(), gen);
 
   RowMatrixXf shuffled(static_cast<Eigen::Index>(m), raw.cols());
@@ -179,18 +186,18 @@ TrainTestSplit prepare_train_test(RowMatrixXf raw, unsigned rng_seed) {
     shuffled.row(static_cast<Eigen::Index>(i)) =
         raw.row(static_cast<Eigen::Index>(perm[i]));
 
-  const size_t test_n = static_cast<size_t>(m / 3.333);
-  const size_t train_n = m - test_n;
-  const auto tr = static_cast<Eigen::Index>(train_n);
+  const size_t testN = static_cast<size_t>(m / 3.333);
+  const size_t trainN = m - testN;
+  const auto tr = static_cast<Eigen::Index>(trainN);
 
-  const RowMatrixXf train_rows = shuffled.topRows(tr);
-  const RowMatrixXf test_rows = shuffled.bottomRows(shuffled.rows() - tr);
+  const RowMatrixXf trainRows = shuffled.topRows(tr);
+  const RowMatrixXf testRows = shuffled.bottomRows(shuffled.rows() - tr);
 
   TrainTestSplit out;
-  out.yTrain = train_rows.col(0);
-  out.yTest = test_rows.col(0);
-  out.xTrain = train_rows.rightCols(784).array() / 255.f;
-  out.xTest = test_rows.rightCols(784).array() / 255.f;
+  out.yTrain = trainRows.col(0);
+  out.yTest = testRows.col(0);
+  out.xTrain = trainRows.rightCols(784).array() / 255.f;
+  out.xTest = testRows.rightCols(784).array() / 255.f;
   return out;
 }
 
@@ -208,28 +215,50 @@ int accuracy(const RowMatrixXf &logits, const Eigen::VectorXf &y) {
                            static_cast<double>(logits.rows()));
 }
 
+std::pair<RowMatrixXf, Eigen::VectorXf> dataLoader(const RowMatrixXf &x,
+                                                  const Eigen::VectorXf &y,
+                                                  int batchSize) {
+  static std::mt19937 gen{std::random_device{}()};
+  const Eigen::Index n = x.rows();
+  if (n <= 0 || batchSize <= 0)
+    return {RowMatrixXf(0, x.cols()), Eigen::VectorXf(0)};
+  std::uniform_int_distribution<Eigen::Index> dist(0, n - 1);
+
+  RowMatrixXf xBatch(batchSize, x.cols());
+  Eigen::VectorXf yBatch(batchSize);
+  for (int i = 0; i < batchSize; ++i) {
+    const Eigen::Index idx = dist(gen);
+    xBatch.row(i) = x.row(idx);
+    yBatch(i) = y(idx);
+  }
+  return {xBatch, yBatch};
+}
+
 
 
 int main(int argc, char **argv) {
   const std::string csv = (argc > 1) ? argv[1] : "../data/data.csv";
 
-  auto data = read_data(csv);
-  auto split = prepare_train_test(std::move(data), 42);
+  auto data = readData(csv);
+  auto split = prepareTrainTest(std::move(data), 42);
 
   std::cout << "train: " << split.xTrain.rows() << "  test: " << split.xTest.rows()
             << "  features: " << split.xTrain.cols() << '\n';
 
-  int epochs = 100;
-  nn model(784, 10, 10);
-  for (int epoch = 0; epoch < epochs; ++epoch) {
-    (void)model.forward(split.xTrain);
-    model.backward(split.xTrain, split.yTrain);
+  int epochs = 10000;
+  int batchSize = 128;
+  nn model(784, 64, 10);
+  for (int epoch = 0; epoch < epochs; epoch++) {
+    const auto [xTrainBatch, yTrainBatch] = dataLoader(split.xTrain, split.yTrain, batchSize);
+
+    (void)model.forward(xTrainBatch);
+    model.backward(xTrainBatch, yTrainBatch);
     model.step();
 
-    const int train_acc = accuracy(model.forward(split.xTrain), split.yTrain);
-    const int test_acc = accuracy(model.forward(split.xTest), split.yTest);
-    std::cout << "epoch " << epoch << "  train acc " << train_acc << "%  test acc "
-              << test_acc << "%\n";
+    const int trainAcc = accuracy(model.forward(xTrainBatch), yTrainBatch);
+    const int testAcc = accuracy(model.forward(split.xTest), split.yTest);
+    std::cout << "epoch " << epoch << "  train acc " << trainAcc << "%  test acc "
+              << testAcc << "%\n";
   }
 
   return 0;
