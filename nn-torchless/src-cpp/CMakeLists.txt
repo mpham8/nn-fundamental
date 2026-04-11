@@ -11,5 +11,13 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(rapidcsv)
 
+FetchContent_Declare(
+  eigen
+  GIT_REPOSITORY https://gitlab.com/libeigen/eigen.git
+  GIT_TAG 3.4.0
+)
+FetchContent_MakeAvailable(eigen)
+
 add_executable(nn-cpp main.cpp)
-target_include_directories(nn-cpp PRIVATE "${rapidcsv_SOURCE_DIR}/src")
+target_include_directories(
+  nn-cpp PRIVATE "${rapidcsv_SOURCE_DIR}/src" "${eigen_SOURCE_DIR}")
