@@ -1,5 +1,6 @@
 #include <rapidcsv.h>
 #include <Eigen/Dense>
+#include <chrono>
 #include <cmath>
 #include <iostream>
 #include <numeric>
@@ -65,8 +66,14 @@ class nn {
   
   
   nn(int inputDim, int hiddenDim, int outputDim) {
-    w1 = Eigen::MatrixXf::Random(hiddenDim, inputDim) * 0.01f;
-    w2 = Eigen::MatrixXf::Random(outputDim, hiddenDim) * 0.01f;
+    std::mt19937 rng(42);
+    std::normal_distribution<float> dist(0.0f, 1.0f);
+
+    //he initialization for weights
+    w1 = Eigen::MatrixXf::NullaryExpr(hiddenDim, inputDim,  [&]() { return dist(rng); }) * sqrt(2.0f / inputDim);
+    w2 = Eigen::MatrixXf::NullaryExpr(outputDim, hiddenDim, [&]() { return dist(rng); }) * sqrt(2.0f / hiddenDim);
+    
+    //zero intialization for everything else
     b1 = Eigen::MatrixXf::Zero(hiddenDim, 1);
     b2 = Eigen::MatrixXf::Zero(outputDim, 1);
 
@@ -91,6 +98,8 @@ class nn {
   static RowMatrixXf oneHotEncoding(const Eigen::VectorXf &y, int numClasses);
   void backward(const RowMatrixXf &x, const Eigen::VectorXf &y);
   void step();
+  void adamSettings(const float newLR, const std::vector<float> &newBetas, const float newEps);
+
 };
 
 
@@ -215,6 +224,15 @@ void nn::step() {
 }
 
 
+/**
+ * @brief updates adam optimizer settings
+*/
+void nn::adamSettings(const float newLR, const std::vector<float> &newBetas, const float newEps) {
+  lr = newLR;
+  beta1 = newBetas[0];
+  beta2 = newBetas[1];
+  eps = newEps;
+}
 
 
 
@@ -287,24 +305,15 @@ int accuracy(const RowMatrixXf &logits, const Eigen::VectorXf &y) {
 }
 
 
-std::pair<RowMatrixXf, Eigen::VectorXf> dataLoader(const RowMatrixXf &x,
-                                                  const Eigen::VectorXf &y,
-                                                  int batchSize) {
-  static std::mt19937 gen{std::random_device{}()};
-  const Eigen::Index n = x.cols();
-  if (n <= 0 || batchSize <= 0)
-    return {RowMatrixXf(x.rows(), 0), Eigen::VectorXf(0)};
-  std::uniform_int_distribution<Eigen::Index> dist(0, n - 1);
+std::pair<RowMatrixXf, Eigen::VectorXf> dataLoader(const RowMatrixXf &x, const Eigen::VectorXf &y, int batchSize, int step, const std::vector<Eigen::Index> &idx) {
 
   RowMatrixXf xBatch(x.rows(), batchSize);
   Eigen::VectorXf yBatch(batchSize);
-  for (int i = 0; i < batchSize; ++i) {
-    const Eigen::Index idx = dist(gen);
-    xBatch.col(i) = x.col(idx);
-    yBatch(i) = y(idx);
+  for (int i = 0; i < batchSize; i++) {
+    Eigen::Index col = idx[step * batchSize + i];
+    xBatch.col(i) = x.col(col);
+    yBatch(i)     = y(col);
   }
-
-
   return {xBatch, yBatch};
 }
 
@@ -312,6 +321,7 @@ std::pair<RowMatrixXf, Eigen::VectorXf> dataLoader(const RowMatrixXf &x,
 
 
 int main() {
+  //load in data, train/test split
   const std::string csv = "../data/data.csv";
 
   auto data = readData(csv);
@@ -321,24 +331,47 @@ int main() {
             << "  test samples: " << split.xTest.cols()
             << "  feature rows: " << split.xTrain.rows() << '\n';
 
+  //training settings
+  int epochs    = 30;
+  int batchSize = 256;
+  float lr      = 1e-2f;
+  std::vector<float> betas = {0.9f, 0.999f};
+  float eps = 1e-8f;
 
-  int epochs = 10000;
-  int batchSize = 128;
-  nn model(784, 64, 10); //initialize object
+  nn model(784, 64, 10); //init object
+  model.adamSettings(lr, betas, eps); //adam settings
+
+  const Eigen::Index trainN = split.xTrain.cols();
+  const int stepsPerEpoch  = static_cast<int>(trainN / batchSize);
+  const auto trainStart = std::chrono::steady_clock::now();
 
   //training loop
-  for (int epoch = 0; epoch < epochs; epoch++) {
-    const auto [xTrainBatch, yTrainBatch] = dataLoader(split.xTrain, split.yTrain, batchSize);
+  for (int epoch = 1; epoch < epochs; epoch++) {
 
-    (void)model.forward(xTrainBatch); //forward propogate
-    model.backward(xTrainBatch, yTrainBatch); //backward propogate to get gradients
-    model.step(); //parameter update step
+    // shuffle indices for mini batches for sgd
+    std::vector<Eigen::Index> idx(trainN);
+    std::iota(idx.begin(), idx.end(), 0);
+    std::shuffle(idx.begin(), idx.end(), std::mt19937{std::random_device{}()});
+
+    for (int step = 0; step < stepsPerEpoch; step++) {
+      const auto [xBatch, yBatch] = dataLoader(split.xTrain, split.yTrain, batchSize, step, idx); //gets mini batch
+
+      (void)model.forward(xBatch); //forward propogate
+      model.backward(xBatch, yBatch); //backward propogate to get gradients
+      model.step(); //parameter update step
+    }
 
     //get accuracy metrics and print
-    const int trainAcc = accuracy(model.forward(xTrainBatch), yTrainBatch);
+    const int trainAcc = accuracy(model.forward(split.xTrain), split.yTrain);
     const int testAcc = accuracy(model.forward(split.xTest), split.yTest);
-    std::cout << "epoch " << epoch << "  train acc " << trainAcc << "%  test acc " << testAcc << "%\n";
+    std::cout << "epoch: " << epoch << "/" << epochs 
+    << "  train acc: " << trainAcc << "%  test acc: " << testAcc << "%"
+    << "  time: " << std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - trainStart).count() << "secs\n";
   }
+
+  const std::chrono::duration<double> trainElapsed =
+      std::chrono::steady_clock::now() - trainStart;
+  std::cout << "training done: " << std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - trainStart).count() << "secs\n";
 
   return 0;
 }
