@@ -11,6 +11,12 @@
 #define EIGEN_DEFAULT_TO_ROW_MAJOR
 using RowMatrixXf = Eigen::MatrixXf;
 
+/**
+ * @brief simple neural network class with one hidden layer (inputDim -> hiddenDim -> outputDim)
+ *
+ * provides forward propagation, backward propagation, and parameter updates using the adam optimizer
+ */
+
 class nn {
  private:
   //model weights
@@ -30,6 +36,7 @@ class nn {
   Eigen::MatrixXf dJdb1;
 
   //momentum for adam optimizer
+  float iter = 0.0f;
   Eigen::MatrixXf m_dJdw2;
   Eigen::MatrixXf v_dJdw2;
   Eigen::MatrixXf m_dJdw1;
@@ -39,7 +46,6 @@ class nn {
   Eigen::MatrixXf m_dJdb1;
   Eigen::MatrixXf v_dJdb1;
 
-  int iter = 0;
 
   static RowMatrixXf Linear(const RowMatrixXf &x, const RowMatrixXf &w,
                             const RowMatrixXf &b);
@@ -48,6 +54,7 @@ class nn {
 
   void adam(Eigen::MatrixXf &theta, Eigen::MatrixXf &m,
                    Eigen::MatrixXf &v, const Eigen::MatrixXf &g);
+
 
  public:
   //adam optimizer hyperparameters
@@ -58,25 +65,24 @@ class nn {
   
   
   nn(int inputDim, int hiddenDim, int outputDim) {
-    w1 = Eigen::MatrixXf::Random(inputDim, hiddenDim) * 0.01f;
-    w2 = Eigen::MatrixXf::Random(hiddenDim, outputDim) * 0.01f;
-    b1 = Eigen::MatrixXf::Zero(1, hiddenDim);
-    b2 = Eigen::MatrixXf::Zero(1, outputDim);
+    w1 = Eigen::MatrixXf::Random(hiddenDim, inputDim) * 0.01f;
+    w2 = Eigen::MatrixXf::Random(outputDim, hiddenDim) * 0.01f;
+    b1 = Eigen::MatrixXf::Zero(hiddenDim, 1);
+    b2 = Eigen::MatrixXf::Zero(outputDim, 1);
 
-    m_dJdw1 = Eigen::MatrixXf::Zero(inputDim, hiddenDim);
-    v_dJdw1 = Eigen::MatrixXf::Zero(inputDim, hiddenDim);
-    m_dJdw2 = Eigen::MatrixXf::Zero(hiddenDim, outputDim);
-    v_dJdw2 = Eigen::MatrixXf::Zero(hiddenDim, outputDim);
-    m_dJdb1 = Eigen::MatrixXf::Zero(1, hiddenDim);
-    v_dJdb1 = Eigen::MatrixXf::Zero(1, hiddenDim);
-    m_dJdb2 = Eigen::MatrixXf::Zero(1, outputDim);
-    v_dJdb2 = Eigen::MatrixXf::Zero(1, outputDim);
+    m_dJdw1 = Eigen::MatrixXf::Zero(hiddenDim, inputDim);
+    v_dJdw1 = Eigen::MatrixXf::Zero(hiddenDim, inputDim);
+    m_dJdw2 = Eigen::MatrixXf::Zero(outputDim, hiddenDim);
+    v_dJdw2 = Eigen::MatrixXf::Zero(outputDim, hiddenDim);
+    m_dJdb1 = Eigen::MatrixXf::Zero(hiddenDim, 1);
+    v_dJdb1 = Eigen::MatrixXf::Zero(hiddenDim, 1);
+    m_dJdb2 = Eigen::MatrixXf::Zero(outputDim, 1);
+    v_dJdb2 = Eigen::MatrixXf::Zero(outputDim, 1);
 
-    dJdw1 = Eigen::MatrixXf::Zero(inputDim, hiddenDim);
-    dJdw2 = Eigen::MatrixXf::Zero(hiddenDim, outputDim);
-    dJdb1 = Eigen::MatrixXf::Zero(1, hiddenDim);
-    dJdb2 = Eigen::MatrixXf::Zero(1, outputDim);
-    probs = Eigen::MatrixXf::Zero(1, outputDim);
+    dJdw1 = Eigen::MatrixXf::Zero(hiddenDim, inputDim);
+    dJdw2 = Eigen::MatrixXf::Zero(outputDim, hiddenDim);
+    dJdb1 = Eigen::MatrixXf::Zero(hiddenDim, 1);
+    dJdb2 = Eigen::MatrixXf::Zero(outputDim, 1);
   }
 
   ~nn() = default;
@@ -88,71 +94,130 @@ class nn {
 };
 
 
-RowMatrixXf nn::Linear(const RowMatrixXf &x, const RowMatrixXf &w,
-                       const RowMatrixXf &b) {
-  const Eigen::Index n = x.rows();
-  const RowMatrixXf bBroadcast = b.replicate(n, 1);
-  return x * w + bBroadcast;
+/**
+ * @brief linear transform: output = w * x + b
+ * @param x input matrix (currDim x m)
+ * @param w weights (nextDim x currDim)
+ * @param b bias (nextDim x 1)
+ * @return output of linear transformation matrix (nextDim x m)
+ */
+RowMatrixXf nn::Linear(const RowMatrixXf &x, const RowMatrixXf &w, const RowMatrixXf &b) {
+  const RowMatrixXf bBroadcast = b.replicate(1, x.cols());
+  return w * x + bBroadcast;
 }
 
+
+/**
+ * @brief rectified linear unit (ReLU)
+ * @param x input matrix (nextDim x m)
+ * @return output of ReLU matrix (nextDim x m)
+ */
 RowMatrixXf nn::ReLu(const RowMatrixXf &x) { return x.cwiseMax(0.0f); }
 
+
+/**
+ * @brief softmax (f(z)_i = e^z_i / sumj[e^z_j])
+ * @param x input matrix (classes x m)
+ * @return output of softmax matrix (classes x m)
+ */
 RowMatrixXf nn::softmax(const RowMatrixXf &x) {
-  const Eigen::VectorXf rowmax = x.rowwise().maxCoeff();
-  const RowMatrixXf shifted = x - rowmax.replicate(1, x.cols());
+  const auto colmax = x.colwise().maxCoeff();
+  const RowMatrixXf shifted = x - colmax.replicate(x.rows(), 1);
   const RowMatrixXf exps = shifted.array().exp();
-  const Eigen::VectorXf sums = exps.rowwise().sum();
-  return exps.array().cwiseQuotient(sums.replicate(1, x.cols()).array());
+  const auto colsum = exps.colwise().sum();
+  return exps.array().cwiseQuotient(colsum.replicate(x.rows(), 1).array());
 }
 
+
+/**
+ * @brief forward pass
+ * @param x input matrix (inputDim x m)
+ * @return logits (classes x m)
+ */
 RowMatrixXf nn::forward(const RowMatrixXf &x) {
   RowMatrixXf h = Linear(x, w1, b1);
   z1 = h;
   h = ReLu(h);
   a1 = h;
   const RowMatrixXf logits = Linear(h, w2, b2);
+
   probs = softmax(logits);
-  return probs;
+
+
+  return logits;
 }
 
+
+/**
+ * @brief one hot encodes all the labels 
+ * @param y labels for all m samples (m x 1)
+ * @param numClasses number of classes
+ * @return Y one hot encoded matrix (numClasses x m)
+ */
 RowMatrixXf nn::oneHotEncoding(const Eigen::VectorXf &y, int numClasses) {
-  RowMatrixXf oneHot = RowMatrixXf::Zero(y.size(), numClasses);
-  for (Eigen::Index i = 0; i < y.size(); ++i)
-    if (y(i) >= 0 && y(i) < numClasses)
-      oneHot(i, static_cast<int>(y(i))) = 1.0f;
-  return oneHot;
+  const Eigen::Index m = y.size();
+  RowMatrixXf Y = RowMatrixXf::Zero(numClasses, m);
+  for (Eigen::Index j = 0; j < m; ++j) {
+    const int lab = static_cast<int>(y(j));
+    if (lab >= 0 && lab < numClasses)
+      Y(lab, j) = 1.0f;
+  }
+
+
+  return Y;
 }
 
+
+/**
+ * @brief computes gradients via backwards propogation 
+ * @param x input matrix (inputDim x m)
+ * @param y labels for all m samples (m x 1)
+*/
 void nn::backward(const RowMatrixXf &x, const Eigen::VectorXf &y) {
-  const Eigen::Index m = x.rows();
-  const int numClasses = static_cast<int>(w2.cols());
+  const Eigen::Index m = x.cols();
+  const int numClasses = static_cast<int>(w2.rows());
   const RowMatrixXf Y = oneHotEncoding(y, numClasses);
 
-  const RowMatrixXf dJdz2 = 1.0f / static_cast<float>(m) * (probs - Y);
-  dJdw2 = a1.transpose() * dJdz2;
-  dJdb2 = dJdz2.colwise().sum();
-  const RowMatrixXf dJda1 = dJdz2 * w2.transpose();
+  const RowMatrixXf dJdz2 = (probs - Y) / static_cast<float>(m);
+  dJdw2 = dJdz2 * a1.transpose();
+  dJdb2 = dJdz2.rowwise().sum();
+  const RowMatrixXf dJda1 = w2.transpose() * dJdz2;
   const RowMatrixXf dJdz1 = dJda1.cwiseProduct((z1.array() > 0.f).cast<float>().matrix());
-  dJdw1 = x.transpose() * dJdz1;
-  dJdb1 = dJdz1.colwise().sum();
+  dJdw1 = dJdz1 * x.transpose();
+  dJdb1 = dJdz1.rowwise().sum();
 }
 
-void nn::adam(Eigen::MatrixXf &theta, Eigen::MatrixXf &m,
-                     Eigen::MatrixXf &v, const Eigen::MatrixXf &g) {
+
+/**
+ * @brief executes one adam optimizer step for each parameter
+ * @param theta parameter (weight or bias) being updated
+ * @param m running average of first moment
+ * @param v running average of second moment
+ * @param g new gradient
+*/
+void nn::adam(Eigen::MatrixXf &theta, Eigen::MatrixXf &m, Eigen::MatrixXf &v, const Eigen::MatrixXf &g) {
   m = beta1 * m + (1.f - beta1) * g;
-  Eigen::MatrixXf mAdj = m / (1.f - std::pow(beta1, static_cast<float>(iter)));
+  Eigen::MatrixXf mAdj = m / (1.f - std::pow(beta1, iter));
   v = beta2 * v + (1.f - beta2) * g.cwiseProduct(g);
-  Eigen::MatrixXf vAdj = v / (1.f - std::pow(beta2, static_cast<float>(iter)));
+  Eigen::MatrixXf vAdj = v / (1.f - std::pow(beta2, iter));
   theta.array() -= lr * mAdj.array() / (vAdj.array().sqrt() + eps);
 }
 
+/**
+ * @brief executes adam optimizer step for all parameters
+*/
 void nn::step() {
-  iter++;
+  iter += 1.0f;
   adam(w1, m_dJdw1, v_dJdw1, dJdw1);
   adam(w2, m_dJdw2, v_dJdw2, dJdw2);
   adam(b1, m_dJdb1, v_dJdb1, dJdb1);
   adam(b2, m_dJdb2, v_dJdb2, dJdb2);
 }
+
+
+
+
+
 
 struct TrainTestSplit {
   RowMatrixXf xTrain;
@@ -160,6 +225,7 @@ struct TrainTestSplit {
   Eigen::VectorXf yTrain;
   Eigen::VectorXf yTest;
 };
+
 
 RowMatrixXf readData(const std::string &path) {
   rapidcsv::Document doc(path, rapidcsv::LabelParams(0, -1));
@@ -173,6 +239,7 @@ RowMatrixXf readData(const std::string &path) {
   }
   return m;
 }
+
 
 TrainTestSplit prepareTrainTest(RowMatrixXf raw, unsigned rngSeed) {
   const size_t m = static_cast<size_t>(raw.rows());
@@ -196,69 +263,81 @@ TrainTestSplit prepareTrainTest(RowMatrixXf raw, unsigned rngSeed) {
   TrainTestSplit out;
   out.yTrain = trainRows.col(0);
   out.yTest = testRows.col(0);
-  out.xTrain = trainRows.rightCols(784).array() / 255.f;
-  out.xTest = testRows.rightCols(784).array() / 255.f;
+
+  out.xTrain = trainRows.rightCols(784).transpose().array() / 255.f;
+  out.xTest = testRows.rightCols(784).transpose().array() / 255.f;
   return out;
 }
 
-int accuracy(const RowMatrixXf &logits, const Eigen::VectorXf &y) {
-  Eigen::VectorXi pred(logits.rows());
-  for (Eigen::Index i = 0; i < logits.rows(); ++i)
-    logits.row(i).maxCoeff(&pred(i));
 
+int accuracy(const RowMatrixXf &logits, const Eigen::VectorXf &y) {
+  const Eigen::Index m = y.size();
+  if (logits.cols() != m)
+    return 0;
   int correct = 0;
-  for (Eigen::Index i = 0; i < pred.size(); ++i) {
-    if (pred(i) == static_cast<int>(y(i)))
+  for (Eigen::Index j = 0; j < m; ++j) {
+    Eigen::Index pred = 0;
+    logits.col(j).maxCoeff(&pred);
+    if (pred == static_cast<int>(y(j)))
       ++correct;
   }
-  return static_cast<int>(100.0 * static_cast<double>(correct) /
-                           static_cast<double>(logits.rows()));
+
+
+  return static_cast<int>(100.0 * static_cast<double>(correct) / static_cast<double>(m));
 }
+
 
 std::pair<RowMatrixXf, Eigen::VectorXf> dataLoader(const RowMatrixXf &x,
                                                   const Eigen::VectorXf &y,
                                                   int batchSize) {
   static std::mt19937 gen{std::random_device{}()};
-  const Eigen::Index n = x.rows();
+  const Eigen::Index n = x.cols();
   if (n <= 0 || batchSize <= 0)
-    return {RowMatrixXf(0, x.cols()), Eigen::VectorXf(0)};
+    return {RowMatrixXf(x.rows(), 0), Eigen::VectorXf(0)};
   std::uniform_int_distribution<Eigen::Index> dist(0, n - 1);
 
-  RowMatrixXf xBatch(batchSize, x.cols());
+  RowMatrixXf xBatch(x.rows(), batchSize);
   Eigen::VectorXf yBatch(batchSize);
   for (int i = 0; i < batchSize; ++i) {
     const Eigen::Index idx = dist(gen);
-    xBatch.row(i) = x.row(idx);
+    xBatch.col(i) = x.col(idx);
     yBatch(i) = y(idx);
   }
+
+
   return {xBatch, yBatch};
 }
 
 
 
-int main(int argc, char **argv) {
-  const std::string csv = (argc > 1) ? argv[1] : "../data/data.csv";
+
+int main() {
+  const std::string csv = "../data/data.csv";
 
   auto data = readData(csv);
   auto split = prepareTrainTest(std::move(data), 42);
 
-  std::cout << "train: " << split.xTrain.rows() << "  test: " << split.xTest.rows()
-            << "  features: " << split.xTrain.cols() << '\n';
+  std::cout << "train samples (cols): " << split.xTrain.cols()
+            << "  test samples: " << split.xTest.cols()
+            << "  feature rows: " << split.xTrain.rows() << '\n';
+
 
   int epochs = 10000;
   int batchSize = 128;
-  nn model(784, 64, 10);
+  nn model(784, 64, 10); //initialize object
+
+  //training loop
   for (int epoch = 0; epoch < epochs; epoch++) {
     const auto [xTrainBatch, yTrainBatch] = dataLoader(split.xTrain, split.yTrain, batchSize);
 
-    (void)model.forward(xTrainBatch);
-    model.backward(xTrainBatch, yTrainBatch);
-    model.step();
+    (void)model.forward(xTrainBatch); //forward propogate
+    model.backward(xTrainBatch, yTrainBatch); //backward propogate to get gradients
+    model.step(); //parameter update step
 
+    //get accuracy metrics and print
     const int trainAcc = accuracy(model.forward(xTrainBatch), yTrainBatch);
     const int testAcc = accuracy(model.forward(split.xTest), split.yTest);
-    std::cout << "epoch " << epoch << "  train acc " << trainAcc << "%  test acc "
-              << testAcc << "%\n";
+    std::cout << "epoch " << epoch << "  train acc " << trainAcc << "%  test acc " << testAcc << "%\n";
   }
 
   return 0;
