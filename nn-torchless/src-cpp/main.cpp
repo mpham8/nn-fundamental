@@ -10,7 +10,7 @@
 #include <vector>
 
 #define EIGEN_DEFAULT_TO_ROW_MAJOR
-using RowMatrixXf = Eigen::MatrixXf;
+using Matrix = Eigen::MatrixXf;
 
 /**
  * @brief simple neural network class with one hidden layer (inputDim -> hiddenDim -> outputDim)
@@ -28,7 +28,7 @@ class nn {
 
   Eigen::MatrixXf a1;
   Eigen::MatrixXf z1;
-  RowMatrixXf probs;
+  Matrix probs;
 
   //gradients
   Eigen::MatrixXf dJdw2;
@@ -48,10 +48,10 @@ class nn {
   Eigen::MatrixXf v_dJdb1;
 
 
-  static RowMatrixXf Linear(const RowMatrixXf &x, const RowMatrixXf &w,
-                            const RowMatrixXf &b);
-  static RowMatrixXf ReLu(const RowMatrixXf &x);
-  static RowMatrixXf softmax(const RowMatrixXf &x);
+  static Matrix Linear(const Matrix &x, const Matrix &w,
+                            const Matrix &b);
+  static Matrix ReLu(const Matrix &x);
+  static Matrix softmax(const Matrix &x);
 
   void adam(Eigen::MatrixXf &theta, Eigen::MatrixXf &m,
                    Eigen::MatrixXf &v, const Eigen::MatrixXf &g);
@@ -94,9 +94,9 @@ class nn {
 
   ~nn() = default;
 
-  RowMatrixXf forward(const RowMatrixXf &x);
-  static RowMatrixXf oneHotEncoding(const Eigen::VectorXf &y, int numClasses);
-  void backward(const RowMatrixXf &x, const Eigen::VectorXf &y);
+  Matrix forward(const Matrix &x);
+  static Matrix oneHotEncoding(const Eigen::VectorXf &y, int numClasses);
+  void backward(const Matrix &x, const Eigen::VectorXf &y);
   void step();
   void adamSettings(const float newLR, const std::vector<float> &newBetas, const float newEps);
 
@@ -110,8 +110,8 @@ class nn {
  * @param b bias (nextDim x 1)
  * @return output of linear transformation matrix (nextDim x m)
  */
-RowMatrixXf nn::Linear(const RowMatrixXf &x, const RowMatrixXf &w, const RowMatrixXf &b) {
-  const RowMatrixXf bBroadcast = b.replicate(1, x.cols());
+Matrix nn::Linear(const Matrix &x, const Matrix &w, const Matrix &b) {
+  const Matrix bBroadcast = b.replicate(1, x.cols());
   return w * x + bBroadcast;
 }
 
@@ -121,7 +121,7 @@ RowMatrixXf nn::Linear(const RowMatrixXf &x, const RowMatrixXf &w, const RowMatr
  * @param x input matrix (nextDim x m)
  * @return output of ReLU matrix (nextDim x m)
  */
-RowMatrixXf nn::ReLu(const RowMatrixXf &x) { return x.cwiseMax(0.0f); }
+Matrix nn::ReLu(const Matrix &x) { return x.cwiseMax(0.0f); }
 
 
 /**
@@ -129,10 +129,10 @@ RowMatrixXf nn::ReLu(const RowMatrixXf &x) { return x.cwiseMax(0.0f); }
  * @param x input matrix (classes x m)
  * @return output of softmax matrix (classes x m)
  */
-RowMatrixXf nn::softmax(const RowMatrixXf &x) {
+Matrix nn::softmax(const Matrix &x) {
   const auto colmax = x.colwise().maxCoeff();
-  const RowMatrixXf shifted = x - colmax.replicate(x.rows(), 1);
-  const RowMatrixXf exps = shifted.array().exp();
+  const Matrix shifted = x - colmax.replicate(x.rows(), 1);
+  const Matrix exps = shifted.array().exp();
   const auto colsum = exps.colwise().sum();
   return exps.array().cwiseQuotient(colsum.replicate(x.rows(), 1).array());
 }
@@ -143,12 +143,12 @@ RowMatrixXf nn::softmax(const RowMatrixXf &x) {
  * @param x input matrix (inputDim x m)
  * @return logits (classes x m)
  */
-RowMatrixXf nn::forward(const RowMatrixXf &x) {
-  RowMatrixXf h = Linear(x, w1, b1);
+Matrix nn::forward(const Matrix &x) {
+  Matrix h = Linear(x, w1, b1);
   z1 = h;
   h = ReLu(h);
   a1 = h;
-  const RowMatrixXf logits = Linear(h, w2, b2);
+  const Matrix logits = Linear(h, w2, b2);
 
   probs = softmax(logits);
 
@@ -163,9 +163,9 @@ RowMatrixXf nn::forward(const RowMatrixXf &x) {
  * @param numClasses number of classes
  * @return Y one hot encoded matrix (numClasses x m)
  */
-RowMatrixXf nn::oneHotEncoding(const Eigen::VectorXf &y, int numClasses) {
+Matrix nn::oneHotEncoding(const Eigen::VectorXf &y, int numClasses) {
   const Eigen::Index m = y.size();
-  RowMatrixXf Y = RowMatrixXf::Zero(numClasses, m);
+  Matrix Y = Matrix::Zero(numClasses, m);
   for (Eigen::Index j = 0; j < m; ++j) {
     const int lab = static_cast<int>(y(j));
     if (lab >= 0 && lab < numClasses)
@@ -182,16 +182,16 @@ RowMatrixXf nn::oneHotEncoding(const Eigen::VectorXf &y, int numClasses) {
  * @param x input matrix (inputDim x m)
  * @param y labels for all m samples (m x 1)
 */
-void nn::backward(const RowMatrixXf &x, const Eigen::VectorXf &y) {
+void nn::backward(const Matrix &x, const Eigen::VectorXf &y) {
   const Eigen::Index m = x.cols();
   const int numClasses = static_cast<int>(w2.rows());
-  const RowMatrixXf Y = oneHotEncoding(y, numClasses);
+  const Matrix Y = oneHotEncoding(y, numClasses);
 
-  const RowMatrixXf dJdz2 = (probs - Y) / static_cast<float>(m);
+  const Matrix dJdz2 = (probs - Y) / static_cast<float>(m);
   dJdw2 = dJdz2 * a1.transpose();
   dJdb2 = dJdz2.rowwise().sum();
-  const RowMatrixXf dJda1 = w2.transpose() * dJdz2;
-  const RowMatrixXf dJdz1 = dJda1.cwiseProduct((z1.array() > 0.f).cast<float>().matrix());
+  const Matrix dJda1 = w2.transpose() * dJdz2;
+  const Matrix dJdz1 = dJda1.cwiseProduct((z1.array() > 0.f).cast<float>().matrix());
   dJdw1 = dJdz1 * x.transpose();
   dJdb1 = dJdz1.rowwise().sum();
 }
@@ -238,18 +238,18 @@ void nn::adamSettings(const float newLR, const std::vector<float> &newBetas, con
 
 
 struct TrainTestSplit {
-  RowMatrixXf xTrain;
-  RowMatrixXf xTest;
+  Matrix xTrain;
+  Matrix xTest;
   Eigen::VectorXf yTrain;
   Eigen::VectorXf yTest;
 };
 
 
-RowMatrixXf readData(const std::string &path) {
+Matrix readData(const std::string &path) {
   rapidcsv::Document doc(path, rapidcsv::LabelParams(0, -1));
   const Eigen::Index n = static_cast<Eigen::Index>(doc.GetRowCount());
   const int kCols = 785;
-  RowMatrixXf m(n, kCols);
+  Matrix m(n, kCols);
   for (Eigen::Index i = 0; i < n; ++i) {
     const std::vector<float> row = doc.GetRow<float>(static_cast<size_t>(i));
     for (int c = 0; c < kCols; ++c)
@@ -259,14 +259,14 @@ RowMatrixXf readData(const std::string &path) {
 }
 
 
-TrainTestSplit prepareTrainTest(RowMatrixXf raw, unsigned rngSeed) {
+TrainTestSplit prepareTrainTest(Matrix raw, unsigned rngSeed) {
   const size_t m = static_cast<size_t>(raw.rows());
   std::vector<size_t> perm(m);
   std::iota(perm.begin(), perm.end(), 0);
   std::mt19937 gen(rngSeed);
   std::shuffle(perm.begin(), perm.end(), gen);
 
-  RowMatrixXf shuffled(static_cast<Eigen::Index>(m), raw.cols());
+  Matrix shuffled(static_cast<Eigen::Index>(m), raw.cols());
   for (size_t i = 0; i < m; ++i)
     shuffled.row(static_cast<Eigen::Index>(i)) =
         raw.row(static_cast<Eigen::Index>(perm[i]));
@@ -275,8 +275,8 @@ TrainTestSplit prepareTrainTest(RowMatrixXf raw, unsigned rngSeed) {
   const size_t trainN = m - testN;
   const auto tr = static_cast<Eigen::Index>(trainN);
 
-  const RowMatrixXf trainRows = shuffled.topRows(tr);
-  const RowMatrixXf testRows = shuffled.bottomRows(shuffled.rows() - tr);
+  const Matrix trainRows = shuffled.topRows(tr);
+  const Matrix testRows = shuffled.bottomRows(shuffled.rows() - tr);
 
   TrainTestSplit out;
   out.yTrain = trainRows.col(0);
@@ -288,7 +288,7 @@ TrainTestSplit prepareTrainTest(RowMatrixXf raw, unsigned rngSeed) {
 }
 
 
-int accuracy(const RowMatrixXf &logits, const Eigen::VectorXf &y) {
+int accuracy(const Matrix &logits, const Eigen::VectorXf &y) {
   const Eigen::Index m = y.size();
   if (logits.cols() != m)
     return 0;
@@ -305,9 +305,9 @@ int accuracy(const RowMatrixXf &logits, const Eigen::VectorXf &y) {
 }
 
 
-std::pair<RowMatrixXf, Eigen::VectorXf> dataLoader(const RowMatrixXf &x, const Eigen::VectorXf &y, int batchSize, int step, const std::vector<Eigen::Index> &idx) {
+std::pair<Matrix, Eigen::VectorXf> dataLoader(const Matrix &x, const Eigen::VectorXf &y, int batchSize, int step, const std::vector<Eigen::Index> &idx) {
 
-  RowMatrixXf xBatch(x.rows(), batchSize);
+  Matrix xBatch(x.rows(), batchSize);
   Eigen::VectorXf yBatch(batchSize);
   for (int i = 0; i < batchSize; i++) {
     Eigen::Index col = idx[step * batchSize + i];
@@ -332,7 +332,7 @@ int main() {
             << "  feature rows: " << split.xTrain.rows() << '\n';
 
   //training settings
-  int epochs    = 30;
+  int epochs    = 20;
   int batchSize = 256;
   float lr      = 1e-2f;
   std::vector<float> betas = {0.9f, 0.999f};
