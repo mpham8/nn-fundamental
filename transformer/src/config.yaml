@@ -1,0 +1,12 @@
+model:
+  d_model: 128
+  h: 4
+  nx: 3
+  d_k: 32        # d_model // h
+  d_v: 32        # d_model // h
+  max_tokens: 128
+
+train:
+  batch_size: 64
+  epochs: 50
+  lr: 1e-3

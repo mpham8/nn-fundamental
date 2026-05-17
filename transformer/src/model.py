@@ -22,13 +22,15 @@ class MaskedSingleHeadAttentionBlock(nn.Module):
         V = self.W_v(x)
 
         mask = self.mask[:tokens, :tokens]
-        return torch.softmax ( (Q @ K.transpose(-2,-1)) / (self.d_k**0.5) + mask, dim=1) @ V  
+        return torch.softmax((Q @ K.transpose(-2, -1)) / (self.d_k**0.5) + mask, dim=-1) @ V
 
 
 class MaskedMultiHeadAttentionBlock(nn.Module):
-    def __init__(self, d_model, d_k, d_v, h):
+    def __init__(self, d_model, d_k, d_v, h, maxTokens):
         super().__init__()
-        self.heads = nn.ModuleList([MaskedSingleHeadAttentionBlock(d_model, d_k, d_v) for i in range(h)]) #modulelist so can repeat
+        self.heads = nn.ModuleList(
+            [MaskedSingleHeadAttentionBlock(d_model, d_k, d_v, maxTokens) for _ in range(h)]
+        )
         self.W_o = nn.Linear(h * d_v, d_model)
     
     def forward(self, x):
@@ -53,7 +55,7 @@ class FeedForwardBlock(nn.Module):
 class DecoderBlock(nn.Module):
     def __init__(self, d_model, d_k, d_v, h, maxTokens):
         super().__init__()
-        self.attn = MaskedMultiHeadAttentionBlock(d_model, d_k, d_v, h)
+        self.attn = MaskedMultiHeadAttentionBlock(d_model, d_k, d_v, h, maxTokens)
         self.norm1 = nn.LayerNorm(d_model)
         self.ff = FeedForwardBlock(d_model)
         self.norm2 = nn.LayerNorm(d_model)
